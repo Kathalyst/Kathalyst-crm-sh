@@ -1,7 +1,7 @@
 name: twenty
 
 properties:
-  managedEnvironmentId: /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/Microsoft.App/managedEnvironments/CONTAINER_APP_ENVIRONMENT
+  managedEnvironmentId: /subscriptions/188af0b9-5d57-492a-8ed3-b9d0648a2278/resourceGroups/crm-Kathalyst/providers/Microsoft.App/managedEnvironments/crm-kathalyst
   configuration:
     ingress:
       external: true
@@ -11,6 +11,7 @@ properties:
     containers:
       - image: mcr.microsoft.com/azuredocs/containerapps-helloworld:latest
         name: mysampleimagecontainer
+        name: twenty-crm-kathalyst
 
 services:
   server:
