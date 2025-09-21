@@ -1,21 +1,106 @@
-name: Deploy Docker Compose to Azure App Service
+name: Deploy Twenty CRM to Azure App Service
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+env:
+  AZURE_RESOURCE_GROUP: crm-Kathalyst
+  AZURE_APP_SERVICE_PLAN: CRM-ASP
+  AZURE_WEB_APP: twenty-crm-app
+  AZURE_LOCATION: eastus
+  PG_DATABASE_PASSWORD: ${{ secrets.PG_DATABASE_PASSWORD }}
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
+    
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Log in to Azure
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-            
-      - name: Build and deploy Container App
-        uses: azure/container-apps-deploy-action@v1
-        with:
-          yamlConfigPath: docker-compose.yml
-        
+
+      - name: Create App Service Plan (if not exists)
+        run: |
+          az appservice plan create \
+            --name ${{ env.AZURE_APP_SERVICE_PLAN }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --location ${{ env.AZURE_LOCATION }} \
+            --is-linux \
+            --sku B2 \
+            --number-of-workers 1 || echo "App Service Plan already exists"
+
+      - name: Create Web App (if not exists)
+        run: |
+          az webapp create \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --plan ${{ env.AZURE_APP_SERVICE_PLAN }} \
+            --multicontainer-config-type compose \
+            --multicontainer-config-file docker-compose.yml || echo "Web App already exists"
+
+      - name: Configure App Settings
+        run: |
+          az webapp config appsettings set \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --settings \
+              TAG=latest \
+              PG_DATABASE_PASSWORD="${{ secrets.PG_DATABASE_PASSWORD }}" \
+              PG_DATABASE_USER=postgres \
+              PG_DATABASE_HOST=db \
+              PG_DATABASE_PORT=5432 \
+              REDIS_URL=redis://redis:6379 \
+              SERVER_URL="https://${{ env.AZURE_WEB_APP }}.azurewebsites.net" \
+              APP_SECRET="${{ secrets.APP_SECRET }}" \
+              STORAGE_TYPE=local \
+              DISABLE_DB_MIGRATIONS=false \
+              DISABLE_CRON_JOBS_REGISTRATION=false \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+              WEBSITES_PORT=3000
+
+      - name: Configure HTTPS and SSL settings
+        run: |
+          # Force HTTPS redirect
+          az webapp config set \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --https-only true
+          
+          # Set minimum TLS version
+          az webapp config set \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --min-tls-version 1.2
+
+      - name: Deploy Docker Compose configuration
+        run: |
+          az webapp config container set \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --multicontainer-config-type compose \
+            --multicontainer-config-file docker-compose.yml
+
+      - name: Restart Web App
+        run: |
+          az webapp restart \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }}
+
+      - name: Enable logging
+        run: |
+          az webapp log config \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --docker-container-logging filesystem
+
+      - name: Get Application URL
+        run: |
+          echo "Twenty CRM is available at: https://${{ env.AZURE_WEB_APP }}.azurewebsites.net"
+          echo "Logs can be viewed with: az webapp log tail --name ${{ env.AZURE_WEB_APP }} --resource-group ${{ env.AZURE_RESOURCE_GROUP }}"
