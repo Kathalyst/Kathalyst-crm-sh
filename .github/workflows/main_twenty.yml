@@ -11,7 +11,7 @@ env:
   AZURE_APP_SERVICE_PLAN: CRM-ASP
   AZURE_WEB_APP: twenty-crm-app
   AZURE_LOCATION: eastus
-  PG_DATABASE_PASSWORD: ${{ secrets.PG_DATABASE_PASSWORD }}
+  # PG_DATABASE_PASSWORD: ${{ secrets.PG_DATABASE_PASSWORD }}
 
 jobs:
   deploy:
@@ -36,14 +36,48 @@ jobs:
             --sku B2 \
             --number-of-workers 1 || echo "App Service Plan already exists"
 
-      - name: Create Web App (if not exists)
+      - name: Create Web App with main container only
         run: |
           az webapp create \
             --name ${{ env.AZURE_WEB_APP }} \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --plan ${{ env.AZURE_APP_SERVICE_PLAN }} \
-            --multicontainer-config-type compose \
-            --multicontainer-config-file docker-compose.yml || echo "Web App already exists"
+            --deployment-container-image-name twentycrm/twenty:latest || echo "Web App already exists"
+
+      - name: Upload Docker Compose file to storage
+        run: |
+          # Create a storage account for the compose file
+          STORAGE_ACCOUNT="twenty$(date +%s | tail -c 8)"
+          az storage account create \
+            --name $STORAGE_ACCOUNT \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --location ${{ env.AZURE_LOCATION }} \
+            --sku Standard_LRS || true
+          
+          # Get storage account key
+          STORAGE_KEY=$(az storage account keys list \
+            --account-name $STORAGE_ACCOUNT \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query '[0].value' -o tsv)
+          
+          # Create container
+          az storage container create \
+            --name compose \
+            --account-name $STORAGE_ACCOUNT \
+            --account-key $STORAGE_KEY \
+            --public-access blob || true
+          
+          # Upload compose file
+          az storage blob upload \
+            --file docker-compose.yml \
+            --container-name compose \
+            --name docker-compose.yml \
+            --account-name $STORAGE_ACCOUNT \
+            --account-key $STORAGE_KEY || true
+          
+          # Get the blob URL
+          COMPOSE_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net/compose/docker-compose.yml"
+          echo "COMPOSE_URL=$COMPOSE_URL" >> $GITHUB_ENV
 
       - name: Configure App Settings
         run: |
@@ -54,16 +88,23 @@ jobs:
               TAG=latest \
               PG_DATABASE_PASSWORD="${{ secrets.PG_DATABASE_PASSWORD }}" \
               PG_DATABASE_USER=postgres \
-              PG_DATABASE_HOST=db \
-              PG_DATABASE_PORT=5432 \
-              REDIS_URL=redis://redis:6379 \
               SERVER_URL="https://${{ env.AZURE_WEB_APP }}.azurewebsites.net" \
               APP_SECRET="${{ secrets.APP_SECRET }}" \
               STORAGE_TYPE=local \
               DISABLE_DB_MIGRATIONS=false \
               DISABLE_CRON_JOBS_REGISTRATION=false \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
-              WEBSITES_PORT=3000
+              WEBSITES_PORT=3000 \
+              DOCKER_REGISTRY_SERVER_URL=https://index.docker.io \
+              DOCKER_ENABLE_CI=true
+
+      - name: Configure multi-container with URL reference
+        run: |
+          az webapp config container set \
+            --name ${{ env.AZURE_WEB_APP }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --multicontainer-config-type compose \
+            --multicontainer-config-file ${{ env.COMPOSE_URL }}
 
       - name: Configure HTTPS and SSL settings
         run: |
@@ -78,14 +119,6 @@ jobs:
             --name ${{ env.AZURE_WEB_APP }} \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --min-tls-version 1.2
-
-      - name: Deploy Docker Compose configuration
-        run: |
-          az webapp config container set \
-            --name ${{ env.AZURE_WEB_APP }} \
-            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-            --multicontainer-config-type compose \
-            --multicontainer-config-file docker-compose.yml
 
       - name: Restart Web App
         run: |
