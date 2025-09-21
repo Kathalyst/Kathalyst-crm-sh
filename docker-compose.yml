@@ -10,7 +10,6 @@ properties:
   template:
     containers:
       - image: mcr.microsoft.com/azuredocs/containerapps-helloworld:latest
-        name: mysampleimagecontainer
         name: twenty-crm-kathalyst
 
 services:
